@@ -24,7 +24,7 @@ curl -fsSL "${BASE_URL}/sha256sum-${ARCH}.txt" \
 echo "Verifying checksums..."
 (
   cd "${SCRIPT_DIR}"
-  shasum -a 256 -c "sha256sum-${ARCH}.txt"
+  sha256sum -c "sha256sum-${ARCH}.txt"
 )
 
 echo "Done! Artifacts are ready in ${SCRIPT_DIR}."
