@@ -25,6 +25,145 @@
     - rke2_add_iptables_rules | bool
   tags: ["setup-os"]
 
+- name: Check whether cgroup v2 is active
+  ansible.builtin.stat:
+    path: /sys/fs/cgroup/cgroup.controllers
+  register: rke2_cgroup_v2
+  when: rke2_enable_cgroup_v2 | bool
+  tags: ["setup-os"]
+
+- name: Ensure grubby is installed for cgroup v2 kernel configuration
+  ansible.builtin.package:
+    name: grubby
+    state: present
+  when:
+    - rke2_enable_cgroup_v2 | bool
+    - not rke2_cgroup_v2.stat.exists
+    - ansible_facts.os_family in ["RedHat", "Rocky"]
+  tags: ["setup-os"]
+
+- name: Enable cgroup v2 on RHEL-family hosts
+  ansible.builtin.command:
+    argv:
+      - grubby
+      - --update-kernel=ALL
+      - --args=systemd.unified_cgroup_hierarchy=1
+  register: rke2_cgroup_v2_bootstrap
+  changed_when: true
+  when:
+    - rke2_enable_cgroup_v2 | bool
+    - not rke2_cgroup_v2.stat.exists
+    - ansible_facts.os_family in ["RedHat", "Rocky"]
+  notify: Reboot the machine
+  tags: ["setup-os"]
+
+- name: Reboot after enabling cgroup v2
+  ansible.builtin.set_fact:
+    rke2_reboot: true
+  when:
+    - rke2_cgroup_v2_bootstrap is defined
+    - rke2_cgroup_v2_bootstrap.changed
+  tags: ["setup-os"]
+
+- name: Require cgroup v2 on unsupported hosts
+  ansible.builtin.assert:
+    that:
+      - rke2_cgroup_v2.stat.exists
+    fail_msg: >-
+      RKE2 requires cgroup v2, but this host is using cgroup v1 and the role
+      cannot configure cgroup v2 automatically on this operating system.
+  when:
+    - rke2_enable_cgroup_v2 | bool
+    - not rke2_cgroup_v2.stat.exists
+    - ansible_facts.os_family not in ["RedHat", "Rocky"]
+  tags: ["setup-os"]
+
+- name: Build merged node-label list
+  ansible.builtin.set_fact:
+    rke2_node_labels_merged: >-
+      {{
+        (
+          (cluster_rke2_config | default({})).get('node-label', [])
+          + (group_rke2_config | default({})).get('node-label', [])
+          + (host_rke2_config | default({})).get('node-label', [])
+        ) | list
+      }}
+  tags: ["setup-os"]
+
+- name: Install NVIDIA RPM prerequisites on GPU nodes
+  when:
+    - ansible_facts.os_family in ["RedHat", "Rocky"]
+    - "'gpu=true' in rke2_node_labels_merged"
+    - "'accelerator=nvidia' in rke2_node_labels_merged"
+  tags: ["setup-os"]
+  block:
+    - name: Ensure NVIDIA RPM artifacts path is configured
+      ansible.builtin.assert:
+        that:
+          - rke2_nvidia_rpms_path | length > 0
+        fail_msg: >-
+          rke2_nvidia_rpms_path must be set to a local directory containing
+          NVIDIA RPM artifacts when gpu=true and accelerator=nvidia are set.
+
+    - name: NVIDIA RPM | Make temp dir
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .nvidia-install
+      register: nvidia_temp_dir
+
+    - name: Sanitize NVIDIA RPM dir path
+      ansible.builtin.set_fact:
+        sanitized_nvidia_rpms_path: "{{ rke2_nvidia_rpms_path | regex_replace('\\/$', '') }}"
+
+    - name: Send NVIDIA RPM dir from local control machine
+      ansible.builtin.copy:
+        src: "{{ sanitized_nvidia_rpms_path }}/"
+        dest: "{{ nvidia_temp_dir.path }}/nvidia_rpms"
+        mode: '0755'
+
+    - name: Find NVIDIA RPM files in local directory
+      ansible.builtin.find:
+        paths: "{{ nvidia_temp_dir.path }}/nvidia_rpms"
+        patterns: "*.rpm"
+      register: nvidia_rpm_files
+
+    - name: Ensure NVIDIA RPM artifacts exist
+      ansible.builtin.assert:
+        that:
+          - nvidia_rpm_files.files | length > 0
+        fail_msg: >-
+          No NVIDIA RPM files were found in {{ rke2_nvidia_rpms_path }}.
+          Run artifacts/download-artifacts.sh to populate NVIDIA artifacts.
+
+    - name: Find NVIDIA RPM signing keys
+      ansible.builtin.find:
+        paths: "{{ nvidia_temp_dir.path }}/nvidia_rpms"
+        patterns:
+          - "*.pub"
+          - "*.key"
+      register: nvidia_rpm_key_files
+
+    - name: Import NVIDIA RPM signing keys
+      ansible.builtin.rpm_key:
+        state: present
+        key: "{{ item.path }}"
+      loop:
+        "{{ nvidia_rpm_key_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when: nvidia_rpm_key_files.files | length > 0
+
+    - name: Install all found NVIDIA RPM packages
+      ansible.builtin.dnf:
+        name: "{{ nvidia_rpm_files.files | map(attribute='path') | list }}"
+        state: present
+
+    - name: Clean up NVIDIA temporary directory
+      ansible.builtin.file:
+        path: "{{ nvidia_temp_dir.path }}"
+        state: absent
+      when: nvidia_temp_dir.path is defined
+
 - name: Add fapolicyd rules
   ansible.builtin.copy:
     content: "{{ fapolicyd_rules }}"
@@ -36,8 +175,22 @@
     - ansible_facts.services["fapolicyd.service"] is defined
     - ansible_facts.services["fapolicyd.service"].state == "running"
   vars:
+    fapolicyd_rke2_data_dir: >-
+      {{
+        rke2_data_dir
+        | default(
+            (host_rke2_config | default({})).get(
+              'data-dir',
+              (group_rke2_config | default({})).get(
+                'data-dir',
+                (cluster_rke2_config | default({})).get('data-dir', '/var/lib/rancher/rke2')
+              )
+            )
+          )
+      }}
     fapolicyd_rules: |
-      allow perm=any all : dir="{{ rke2_data_dir | dirname }}"
+      allow perm=any all : dir="{{ fapolicyd_rke2_data_dir | dirname }}/"
+      allow perm=any all : dir="{{ fapolicyd_rke2_data_dir }}/data/"
       allow perm=any all : dir=/opt/cni/
       allow perm=any all : dir=/run/k3s/
       allow perm=any all : dir=/var/lib/kubelet/

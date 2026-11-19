@@ -13,6 +13,13 @@
   when:
     - not rke2_reboot
 
+- name: Update fapolicyd trust database
+  ansible.builtin.command:
+    cmd: /usr/sbin/fapolicyd-cli -u
+  changed_when: true
+  when:
+    - not rke2_reboot
+
 - name: Restart rke2-server
   ansible.builtin.service:
     state: restarted

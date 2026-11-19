@@ -2,12 +2,71 @@
 set -euo pipefail
 
 # Default RKE2 version to download (override by passing RKE2_VERSION env var)
-RKE2_VERSION="${RKE2_VERSION:-v1.36.6+rke2r1}"
+RKE2_VERSION="${RKE2_VERSION:-v1.36.2+rke2r1}"
 ARCH="${ARCH:-amd64}"
+DOWNLOAD_SELINUX_RPM="${DOWNLOAD_SELINUX_RPM:-true}"
+DOWNLOAD_RKE2_RPMS="${DOWNLOAD_RKE2_RPMS:-true}"
+DOWNLOAD_NVIDIA_RPMS="${DOWNLOAD_NVIDIA_RPMS:-false}"
+RKE2_CHANNEL="${RKE2_CHANNEL:-stable}"
+SELINUX_RPM_RELEASEVER="${SELINUX_RPM_RELEASEVER:-8}"
+NVIDIA_DRIVER_STREAM="${NVIDIA_DRIVER_STREAM:-580}"
+NVIDIA_RPM_RELEASEVER="${NVIDIA_RPM_RELEASEVER:-${SELINUX_RPM_RELEASEVER}}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENCODED_VERSION="${RKE2_VERSION//+/%2B}"
 BASE_URL="https://github.com/rancher/rke2/releases/download/${ENCODED_VERSION}"
+SELINUX_REPO_BASE_URL="https://rpm.rancher.io/rke2/${RKE2_CHANNEL}/common/centos/${SELINUX_RPM_RELEASEVER}/noarch"
+RKE2_VERSION_MAJMIN="$(echo "${RKE2_VERSION}" | sed -E 's/^v?([0-9]+\.[0-9]+).*/\1/')"
+RKE2_RPM_VERSION="${RKE2_VERSION#v}"
+RKE2_RPM_VERSION="${RKE2_RPM_VERSION//+/\~}"
+RPM_ARCH="${ARCH}"
+if [[ "${ARCH}" == "amd64" ]]; then
+  RPM_ARCH="x86_64"
+elif [[ "${ARCH}" == "arm64" ]]; then
+  RPM_ARCH="aarch64"
+fi
+RKE2_VERSIONED_REPO_BASE_URL="https://rpm.rancher.io/rke2/${RKE2_CHANNEL}/${RKE2_VERSION_MAJMIN}/centos/${SELINUX_RPM_RELEASEVER}/${RPM_ARCH}"
+RPM_OUTPUT_DIR="${SCRIPT_DIR}/rpms"
+NVIDIA_RPM_OUTPUT_DIR="${RPM_OUTPUT_DIR}/nvidia"
+NVIDIA_CUDA_REPO_BASE_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel${NVIDIA_RPM_RELEASEVER}/${RPM_ARCH}"
+NVIDIA_CONTAINER_REPO_BASE_URL="https://nvidia.github.io/libnvidia-container/stable/rpm/rhel${NVIDIA_RPM_RELEASEVER}/${RPM_ARCH}"
+
+get_primary_path() {
+  local repo_url="$1"
+  curl -fsSL "${repo_url}/repodata/repomd.xml" \
+    | sed -n '/<data type="primary">/,/<\/data>/s/.*location href="\([^"]*\)".*/\1/p' \
+    | head -n 1
+}
+
+get_rpm_href() {
+  local repo_url="$1"
+  local package_name="$2"
+  local package_version="$3"
+  local primary_path
+  primary_path="$(get_primary_path "${repo_url}")"
+  if [[ -z "${primary_path}" ]]; then
+    return 1
+  fi
+  curl -fsSL "${repo_url}/${primary_path}" \
+    | gzip -dc \
+    | awk -v name="${package_name}" -v version="${package_version}" '
+      BEGIN { RS="</package>" }
+      index($0, "<name>" name "</name>") && index($0, "ver=\"" version "\"") {
+        if (match($0, /location href="([^"]+)"/, m)) {
+          print m[1]
+        }
+
+        require_dnf() {
+          if ! command -v dnf >/dev/null 2>&1; then
+            echo "Downloading NVIDIA RPMs requires dnf on the artifact download host." >&2
+            echo "Install dnf and rerun with DOWNLOAD_NVIDIA_RPMS=true, or set DOWNLOAD_NVIDIA_RPMS=false." >&2
+            exit 1
+          fi
+        }
+      }
+    ' \
+    | head -n 1
+}
 
 echo "Downloading RKE2 ${RKE2_VERSION} (${ARCH}) artifacts into ${SCRIPT_DIR}..."
 
@@ -26,6 +85,87 @@ echo "Verifying checksums..."
   cd "${SCRIPT_DIR}"
   sha256sum -c "sha256sum-${ARCH}.txt"
 )
+
+if [[ "${DOWNLOAD_SELINUX_RPM}" == "true" ]]; then
+  mkdir -p "${RPM_OUTPUT_DIR}"
+  echo "Resolving latest rke2-selinux RPM from ${SELINUX_REPO_BASE_URL}..."
+  primary_path="$(get_primary_path "${SELINUX_REPO_BASE_URL}")"
+  if [[ -z "${primary_path}" ]]; then
+    echo "Failed to discover primary metadata path for rke2-selinux RPM." >&2
+    exit 1
+  fi
+
+  selinux_rpm_name="$(
+    curl -fsSL "${SELINUX_REPO_BASE_URL}/${primary_path}" \
+      | gzip -dc \
+      | awk 'BEGIN{RS="</package>"} /<name>rke2-selinux<\/name>/ { if (match($0,/location href="([^"]+)"/,m)) print m[1] }' \
+      | sort -V \
+      | tail -n 1
+  )"
+  if [[ -z "${selinux_rpm_name}" ]]; then
+    echo "Failed to discover rke2-selinux RPM name in repository metadata." >&2
+    exit 1
+  fi
+
+  curl -fL -o "${RPM_OUTPUT_DIR}/${selinux_rpm_name}" \
+    "${SELINUX_REPO_BASE_URL}/${selinux_rpm_name}"
+fi
+
+if [[ "${DOWNLOAD_RKE2_RPMS}" == "true" ]]; then
+  mkdir -p "${RPM_OUTPUT_DIR}"
+  curl -fL -o "${RPM_OUTPUT_DIR}/rancher-rke2-public.key" \
+    "https://rpm.rancher.io/public.key"
+  for pkg in rke2-server rke2-agent rke2-common; do
+    rpm_href="$(get_rpm_href "${RKE2_VERSIONED_REPO_BASE_URL}" "${pkg}" "${RKE2_RPM_VERSION}")"
+    if [[ -z "${rpm_href:-}" ]]; then
+      echo "Failed to find ${pkg} RPM for ${RKE2_VERSION} in ${RKE2_VERSIONED_REPO_BASE_URL}" >&2
+      exit 1
+    fi
+    curl -fL -o "${RPM_OUTPUT_DIR}/$(basename "${rpm_href}")" \
+      "${RKE2_VERSIONED_REPO_BASE_URL}/${rpm_href}"
+  done
+fi
+
+if [[ "${DOWNLOAD_NVIDIA_RPMS}" == "true" ]]; then
+  require_dnf
+
+  mkdir -p "${NVIDIA_RPM_OUTPUT_DIR}"
+  curl -fL -o "${NVIDIA_RPM_OUTPUT_DIR}/nvidia-cuda-public.key" \
+    "${NVIDIA_CUDA_REPO_BASE_URL}/D42D0685.pub"
+  curl -fL -o "${NVIDIA_RPM_OUTPUT_DIR}/nvidia-container-toolkit-public.key" \
+    "https://nvidia.github.io/libnvidia-container/gpgkey"
+
+  nvidia_download_root="$(mktemp -d)"
+  trap 'rm -rf "${nvidia_download_root}"' EXIT
+
+  dnf \
+    --assumeyes \
+    --installroot "${nvidia_download_root}/installroot" \
+    --releasever "${NVIDIA_RPM_RELEASEVER}" \
+    --setopt=install_weak_deps=False \
+    --setopt=best=True \
+    --disablerepo='*' \
+    --repofrompath=nvidia-cuda,"${NVIDIA_CUDA_REPO_BASE_URL}" \
+    module enable "nvidia-driver:${NVIDIA_DRIVER_STREAM}"
+
+  dnf \
+    --assumeyes \
+    --installroot "${nvidia_download_root}/installroot" \
+    --releasever "${NVIDIA_RPM_RELEASEVER}" \
+    --setopt=install_weak_deps=False \
+    --setopt=best=True \
+    --disablerepo='*' \
+    --repofrompath=nvidia-cuda,"${NVIDIA_CUDA_REPO_BASE_URL}" \
+    --repofrompath=nvidia-container,"${NVIDIA_CONTAINER_REPO_BASE_URL}" \
+    install \
+    --downloadonly \
+    --downloaddir "${NVIDIA_RPM_OUTPUT_DIR}" \
+    nvidia-driver-cuda \
+    nvidia-container-toolkit
+
+  rm -rf "${nvidia_download_root}"
+  trap - EXIT
+fi
 
 echo "Done! Artifacts are ready in ${SCRIPT_DIR}."
 

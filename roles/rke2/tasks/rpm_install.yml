@@ -71,6 +71,16 @@
         patterns: "*.rpm"
       register: rpm_files
 
+    - name: Check for bundled Rancher RPM signing key
+      ansible.builtin.stat:
+        path: "{{ temp_dir.path }}/rke2_rpms/rancher-rke2-public.key"
+      register: bundled_rke2_gpg_key
+
+    - name: Import RKE2 RPM signing key
+      ansible.builtin.rpm_key:
+        state: present
+        key: "{{ (temp_dir.path + '/rke2_rpms/rancher-rke2-public.key') if bundled_rke2_gpg_key.stat.exists else rke2_common_yum_repo.gpgkey }}"
+
     - name: Ensuring both server and agent RPMs aren't being installed
       ansible.builtin.set_fact:
         do_not_install: "{{ 'rke2-agent' if service_name == 'rke2-server' else 'rke2-server' }}"

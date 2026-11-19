@@ -54,15 +54,12 @@
   when:
     - (rke2_install_local_tarball_path != "" or rke2_install_tarball_url != "")
   block:
-    - name: Unarchive tarball into temp location
-      ansible.builtin.unarchive:
-        src: "{{ temp_dir.path }}/rke2.linux-{{ arch }}.tar.gz"
-        dest: "{{ temp_dir.path }}"
-        remote_src: true
-      changed_when: false
-
-    - name: Get tarball RKE2 version from temp location
-      ansible.builtin.shell: set -o pipefail && {{ temp_dir.path }}/bin/rke2 -v | awk '$1 ~ /rke2/ { print $3 }'
+    - name: Get tarball RKE2 version from tarball contents
+      ansible.builtin.shell: >-
+        set -o pipefail &&
+        tar -xOf {{ temp_dir.path }}/rke2.linux-{{ arch }}.tar.gz bin/rke2 |
+        tr -c '[:alnum:]+._-' '\n' |
+        awk '/^v[0-9]+\.[0-9]+\.[0-9]+\+rke2r[0-9]+$/ { if (ver == "") ver = $0 } END { if (ver != "") print ver; else exit 1 }'
       register: rke2_tarball_version_tmp
       changed_when: false
       args:
@@ -184,3 +181,37 @@
     path: "{{ temp_dir.path }}"
     state: absent
   when: temp_dir.path is defined
+
+- name: TARBALL | Find RKE2 executables for fapolicyd trust
+  ansible.builtin.find:
+    paths:
+      - "{{ rke2_tarball_install_dir }}/bin"
+      - "{{ rke2_data_dir }}/data"
+    file_type: file
+    recurse: true
+  register: rke2_fapolicyd_files
+  when:
+    - ansible_facts.services["fapolicyd.service"] is defined
+    - ansible_facts.services["fapolicyd.service"].state == "running"
+
+- name: TARBALL | Trust RKE2 executables with fapolicyd
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/fapolicyd-cli
+      - -f
+      - add
+      - "{{ item.path }}"
+  register: rke2_fapolicyd_trust
+  loop: "{{ rke2_fapolicyd_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - ansible_facts.services["fapolicyd.service"] is defined
+    - ansible_facts.services["fapolicyd.service"].state == "running"
+    - item.path.startswith(rke2_tarball_install_dir + "/bin/")
+      or "/bin/" in item.path
+  changed_when: "'nothing to add' not in rke2_fapolicyd_trust.stderr"
+  failed_when:
+    - rke2_fapolicyd_trust.rc != 0
+    - "'nothing to add' not in rke2_fapolicyd_trust.stderr"
+  notify: Update fapolicyd trust database

@@ -35,6 +35,10 @@ rke2_versioned_yum_repo:
 ### Additional RPMs in this folder will be installed as well.
 rke2_rpms_path: ""
 
+## Path to directory local to Ansible Control Host that contains NVIDIA driver/container toolkit RPMs for GPU nodes.
+### Used only when node labels include gpu=true and accelerator=nvidia.
+rke2_nvidia_rpms_path: "{{ (rke2_rpms_path ~ '/nvidia') if (rke2_rpms_path | length > 0) else '' }}"
+
 ## Tarball Install Specific Variables:
 
 ### If installing via Tarball, the location to extract the contents.
@@ -101,6 +105,9 @@ rke2_systemd_env_config_file_path: ""
 kube_api_authn_webhook_file_path: ""
 ## Set to 'false' if Ansible should not attempt to upgrade an installed version of RKE2. This is useful if using the System Upgrade Controller to manage the installed version of RKE2.
 rke2_upgrade: true
+
+## RKE2 releases that require cgroup v2 need this enabled on older RHEL-family hosts.
+rke2_enable_cgroup_v2: true
 
 ## Value for how many Agent nodes can have their service restarted at time when a config change is made
 rke2_agent_service_restart_throttle: 1

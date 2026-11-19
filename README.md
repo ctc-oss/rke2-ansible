@@ -95,6 +95,7 @@ The rke2-common RPM creates the 80-rke2.rules file with root:root ownership. Thi
 ```bash
 cat <<-EOF >>"/etc/fapolicyd/rules.d/80-rke2.rules"
 allow perm=any all : dir=/var/lib/rancher/
+allow perm=any all : dir=/var/lib/rancher/rke2/data/
 allow perm=any all : dir=/opt/cni/
 allow perm=any all : dir=/run/k3s/
 allow perm=any all : dir=/var/lib/kubelet/
