@@ -17,11 +17,27 @@ RKE2_VERSION="v1.36.2+rke2r1" ./artifacts/download-artifacts.sh
 Optional environment variables:
 - `DOWNLOAD_SELINUX_RPM=true|false` (default `true`)
 - `DOWNLOAD_RKE2_RPMS=true|false` (default `true`)
-- `DOWNLOAD_NVIDIA_RPMS=true|false` (default `false`)
+- `DOWNLOAD_NVIDIA_RPMS=true|false` (default `true`; set `false` to skip NVIDIA artifacts)
 - `RKE2_CHANNEL=stable|latest` (default `stable`, for SELinux RPM repo)
 - `SELINUX_RPM_RELEASEVER=8|9` (default `8`)
 - `NVIDIA_DRIVER_STREAM=<major>` (default `580`, used when `DOWNLOAD_NVIDIA_RPMS=true`)
 - `NVIDIA_RPM_RELEASEVER=8|9` (default follows `SELINUX_RPM_RELEASEVER`)
+- `NVIDIA_DEPENDENCY_REPOS=<comma-separated repo IDs or globs>` (default `rhel*-base*,rhel*-appstream*,rhel*-codereadybuilder*`)
+
+For NVIDIA artifacts, run on an internet-connected RHEL download host with
+`dnf` and access to BaseOS, AppStream, and CodeReady Builder repositories
+matching the target release and architecture:
+
+```bash
+DOWNLOAD_NVIDIA_RPMS=true ./artifacts/download-artifacts.sh
+```
+
+Override `NVIDIA_DEPENDENCY_REPOS` if your repository IDs differ. DNF resolves
+dependencies in a temporary empty install root, so packages already installed
+on the download host do not get omitted. No drivers are installed on that host.
+The numeric driver stream uses a precompiled kernel module. Its target kernel
+must match the GPU host's kernel; check the downloaded `kmod-nvidia` RPM before
+deploying. A successful download does not verify kernel compatibility on nodes.
 
 ## Expected Files
 

@@ -6,11 +6,12 @@ RKE2_VERSION="${RKE2_VERSION:-v1.36.2+rke2r1}"
 ARCH="${ARCH:-amd64}"
 DOWNLOAD_SELINUX_RPM="${DOWNLOAD_SELINUX_RPM:-true}"
 DOWNLOAD_RKE2_RPMS="${DOWNLOAD_RKE2_RPMS:-true}"
-DOWNLOAD_NVIDIA_RPMS="${DOWNLOAD_NVIDIA_RPMS:-false}"
+DOWNLOAD_NVIDIA_RPMS="${DOWNLOAD_NVIDIA_RPMS:-true}"
 RKE2_CHANNEL="${RKE2_CHANNEL:-stable}"
 SELINUX_RPM_RELEASEVER="${SELINUX_RPM_RELEASEVER:-8}"
 NVIDIA_DRIVER_STREAM="${NVIDIA_DRIVER_STREAM:-580}"
 NVIDIA_RPM_RELEASEVER="${NVIDIA_RPM_RELEASEVER:-${SELINUX_RPM_RELEASEVER}}"
+NVIDIA_DEPENDENCY_REPOS="${NVIDIA_DEPENDENCY_REPOS:-rhel*-base*,rhel*-appstream*,rhel*-codereadybuilder*}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENCODED_VERSION="${RKE2_VERSION//+/%2B}"
@@ -29,7 +30,7 @@ RKE2_VERSIONED_REPO_BASE_URL="https://rpm.rancher.io/rke2/${RKE2_CHANNEL}/${RKE2
 RPM_OUTPUT_DIR="${SCRIPT_DIR}/rpms"
 NVIDIA_RPM_OUTPUT_DIR="${RPM_OUTPUT_DIR}/nvidia"
 NVIDIA_CUDA_REPO_BASE_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel${NVIDIA_RPM_RELEASEVER}/${RPM_ARCH}"
-NVIDIA_CONTAINER_REPO_BASE_URL="https://nvidia.github.io/libnvidia-container/stable/rpm/rhel${NVIDIA_RPM_RELEASEVER}/${RPM_ARCH}"
+NVIDIA_CONTAINER_REPO_BASE_URL="https://nvidia.github.io/libnvidia-container/stable/rpm/${RPM_ARCH}"
 
 get_primary_path() {
   local repo_url="$1"
@@ -55,17 +56,16 @@ get_rpm_href() {
         if (match($0, /location href="([^"]+)"/, m)) {
           print m[1]
         }
-
-        require_dnf() {
-          if ! command -v dnf >/dev/null 2>&1; then
-            echo "Downloading NVIDIA RPMs requires dnf on the artifact download host." >&2
-            echo "Install dnf and rerun with DOWNLOAD_NVIDIA_RPMS=true, or set DOWNLOAD_NVIDIA_RPMS=false." >&2
-            exit 1
-          fi
-        }
       }
     ' \
     | head -n 1
+}
+
+require_dnf() {
+  if ! command -v dnf >/dev/null 2>&1; then
+    echo "Downloading NVIDIA RPMs requires dnf on the artifact download host." >&2
+    exit 1
+  fi
 }
 
 echo "Downloading RKE2 ${RKE2_VERSION} (${ARCH}) artifacts into ${SCRIPT_DIR}..."
@@ -142,21 +142,29 @@ if [[ "${DOWNLOAD_NVIDIA_RPMS}" == "true" ]]; then
     --assumeyes \
     --installroot "${nvidia_download_root}/installroot" \
     --releasever "${NVIDIA_RPM_RELEASEVER}" \
+    --setopt=module_platform_id=platform:el"${NVIDIA_RPM_RELEASEVER}" \
     --setopt=install_weak_deps=False \
     --setopt=best=True \
     --disablerepo='*' \
-    --repofrompath=nvidia-cuda,"${NVIDIA_CUDA_REPO_BASE_URL}" \
+    --enablerepo="${NVIDIA_DEPENDENCY_REPOS}" \
+    --repofrompath=rke2-artifacts-nvidia-cuda,"${NVIDIA_CUDA_REPO_BASE_URL}" \
     module enable "nvidia-driver:${NVIDIA_DRIVER_STREAM}"
 
   dnf \
     --assumeyes \
     --installroot "${nvidia_download_root}/installroot" \
     --releasever "${NVIDIA_RPM_RELEASEVER}" \
+    --setopt=module_platform_id=platform:el"${NVIDIA_RPM_RELEASEVER}" \
     --setopt=install_weak_deps=False \
     --setopt=best=True \
     --disablerepo='*' \
-    --repofrompath=nvidia-cuda,"${NVIDIA_CUDA_REPO_BASE_URL}" \
-    --repofrompath=nvidia-container,"${NVIDIA_CONTAINER_REPO_BASE_URL}" \
+    --enablerepo="${NVIDIA_DEPENDENCY_REPOS}" \
+    --repofrompath=rke2-artifacts-nvidia-cuda,"${NVIDIA_CUDA_REPO_BASE_URL}" \
+    --repofrompath=rke2-artifacts-nvidia-container,"${NVIDIA_CONTAINER_REPO_BASE_URL}" \
+    --setopt=rke2-artifacts-nvidia-cuda.gpgcheck=True \
+    --setopt=rke2-artifacts-nvidia-cuda.gpgkey="file://${NVIDIA_RPM_OUTPUT_DIR}/nvidia-cuda-public.key" \
+    --setopt=rke2-artifacts-nvidia-container.gpgcheck=True \
+    --setopt=rke2-artifacts-nvidia-container.gpgkey="file://${NVIDIA_RPM_OUTPUT_DIR}/nvidia-container-toolkit-public.key" \
     install \
     --downloadonly \
     --downloaddir "${NVIDIA_RPM_OUTPUT_DIR}" \
