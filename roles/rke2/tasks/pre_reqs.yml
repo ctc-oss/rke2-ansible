@@ -196,3 +196,15 @@
       allow perm=any all : dir=/var/lib/kubelet/
   notify: Restart fapolicyd
   tags: ["setup-os"]
+
+- name: Check whether fapolicyd rules need recompiling
+  ansible.builtin.command:
+    cmd: /usr/sbin/fagenrules --check
+  register: fapolicyd_rules_check
+  changed_when: fapolicyd_rules_check.rc == 1
+  failed_when: fapolicyd_rules_check.rc not in [0, 1]
+  when:
+    - ansible_facts.services["fapolicyd.service"] is defined
+    - ansible_facts.services["fapolicyd.service"].state == "running"
+  notify: Restart fapolicyd
+  tags: ["setup-os"]
