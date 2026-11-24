@@ -173,7 +173,6 @@
     group: fapolicyd
   when:
     - ansible_facts.services["fapolicyd.service"] is defined
-    - ansible_facts.services["fapolicyd.service"].state == "running"
   vars:
     fapolicyd_rke2_data_dir: >-
       {{
@@ -189,8 +188,7 @@
           )
       }}
     fapolicyd_rules: |
-      allow perm=any all : dir="{{ fapolicyd_rke2_data_dir | dirname }}/"
-      allow perm=any all : dir="{{ fapolicyd_rke2_data_dir }}/data/"
+      allow perm=any all : dir={{ fapolicyd_rke2_data_dir }}/
       allow perm=any all : dir=/opt/cni/
       allow perm=any all : dir=/run/k3s/
       allow perm=any all : dir=/var/lib/kubelet/
@@ -201,10 +199,17 @@
   ansible.builtin.command:
     cmd: /usr/sbin/fagenrules --check
   register: fapolicyd_rules_check
-  changed_when: fapolicyd_rules_check.rc == 1
-  failed_when: fapolicyd_rules_check.rc not in [0, 1]
+  changed_when: "'Rules have changed' in fapolicyd_rules_check.stdout"
   when:
     - ansible_facts.services["fapolicyd.service"] is defined
-    - ansible_facts.services["fapolicyd.service"].state == "running"
+  tags: ["setup-os"]
+
+- name: Compile updated fapolicyd rules
+  ansible.builtin.command:
+    cmd: /usr/sbin/fagenrules --load
+  changed_when: true
+  when:
+    - fapolicyd_rules_check is not skipped
+    - fapolicyd_rules_check is changed
   notify: Restart fapolicyd
   tags: ["setup-os"]

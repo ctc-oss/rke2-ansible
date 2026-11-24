@@ -12,6 +12,7 @@
     name: fapolicyd
   when:
     - not rke2_reboot
+    - ansible_facts.services["fapolicyd.service"].state == "running"
 
 - name: Update fapolicyd trust database
   ansible.builtin.command:
