@@ -22,6 +22,7 @@ Optional environment variables:
 - `SELINUX_RPM_RELEASEVER=8|9` (default `8`)
 - `NVIDIA_DRIVER_STREAM=<major>` (default `580`, used when `DOWNLOAD_NVIDIA_RPMS=true`)
 - `NVIDIA_RPM_RELEASEVER=8|9` (default follows `SELINUX_RPM_RELEASEVER`)
+- `NVIDIA_DEVICE_PLUGIN_IMAGE=<image>` (default `nvcr.io/nvidia/k8s-device-plugin:v0.20.2`)
 - `NVIDIA_DEPENDENCY_REPOS=<comma-separated repo IDs or globs>` (default `rhel*-base*,rhel*-appstream*,rhel*-codereadybuilder*`)
 
 For NVIDIA artifacts, run on an internet-connected RHEL download host with
@@ -38,6 +39,7 @@ on the download host do not get omitted. No drivers are installed on that host.
 The numeric driver stream uses a precompiled kernel module. Its target kernel
 must match the GPU host's kernel; check the downloaded `kmod-nvidia` RPM before
 deploying. A successful download does not verify kernel compatibility on nodes.
+The NVIDIA device plugin image requires `skopeo` or `ctr` on the download host.
 
 ## Expected Files
 
@@ -51,4 +53,5 @@ deploying. A successful download does not verify kernel compatibility on nodes.
 - `rpms/nvidia/*.rpm` — NVIDIA driver/runtime RPMs (when `DOWNLOAD_NVIDIA_RPMS=true`)
 - `rpms/nvidia/nvidia-cuda-public.key` — NVIDIA CUDA RPM GPG public key
 - `rpms/nvidia/nvidia-container-toolkit-public.key` — NVIDIA container toolkit RPM GPG public key
+- `nvidia-device-plugin.linux-<arch>.tar` — Airgap NVIDIA Kubernetes device-plugin image
 

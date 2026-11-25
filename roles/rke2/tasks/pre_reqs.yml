@@ -90,13 +90,37 @@
       }}
   tags: ["setup-os"]
 
+- name: Detect NVIDIA GPU role
+  ansible.builtin.set_fact:
+    rke2_nvidia_enabled: >-
+      {{
+        'gpu=true' in rke2_node_labels_merged
+        and 'accelerator=nvidia' in rke2_node_labels_merged
+      }}
+  tags: ["setup-os"]
+
 - name: Install NVIDIA RPM prerequisites on GPU nodes
   when:
     - ansible_facts.os_family in ["RedHat", "Rocky"]
-    - "'gpu=true' in rke2_node_labels_merged"
-    - "'accelerator=nvidia' in rke2_node_labels_merged"
+    - rke2_nvidia_enabled | bool
   tags: ["setup-os"]
   block:
+    - name: Check Secure Boot state
+      ansible.builtin.command:
+        cmd: /usr/bin/mokutil --sb-state
+      register: rke2_secure_boot_state
+      changed_when: false
+      failed_when: rke2_secure_boot_state.rc != 0
+
+    - name: Require Secure Boot to be disabled for NVIDIA workers
+      ansible.builtin.assert:
+        that:
+          - "'SecureBoot enabled' not in rke2_secure_boot_state.stdout"
+        fail_msg: >-
+          Secure Boot is enabled on {{ inventory_hostname }}. Disable Secure Boot
+          at the hypervisor or physical firmware level before installing the
+          NVIDIA driver, then reboot the host and rerun this playbook.
+
     - name: Ensure NVIDIA RPM artifacts path is configured
       ansible.builtin.assert:
         that:
@@ -157,6 +181,67 @@
       ansible.builtin.dnf:
         name: "{{ nvidia_rpm_files.files | map(attribute='path') | list }}"
         state: present
+      notify: "Restart {{ service_name }}"
+
+    - name: Detect NVIDIA PCI devices
+      ansible.builtin.command:
+        cmd: "/usr/sbin/lspci -d 10de:"
+      register: rke2_nvidia_pci_devices
+      changed_when: false
+      failed_when: rke2_nvidia_pci_devices.rc != 0
+
+    - name: Require NVIDIA hardware on GPU-labeled hosts
+      ansible.builtin.assert:
+        that:
+          - rke2_nvidia_pci_devices.stdout_lines | length > 0
+        fail_msg: >-
+          {{ inventory_hostname }} has gpu=true and accelerator=nvidia, but no
+          NVIDIA PCI device is visible. Verify PCI/GPU passthrough in the
+          hypervisor and reboot the host.
+
+    - name: Read NVIDIA kernel module metadata
+      ansible.builtin.command:
+        cmd: /usr/sbin/modinfo --field vermagic nvidia
+      register: rke2_nvidia_module_vermagic
+      changed_when: false
+      failed_when: rke2_nvidia_module_vermagic.rc != 0
+
+    - name: Require an NVIDIA module matching the running kernel
+      ansible.builtin.assert:
+        that:
+          - rke2_nvidia_module_vermagic.stdout.startswith(ansible_facts.kernel)
+        fail_msg: >-
+          The installed NVIDIA kernel module is not built for the running
+          kernel {{ ansible_facts.kernel }}. Module metadata is
+          '{{ rke2_nvidia_module_vermagic.stdout }}'. Rebuild the artifact
+          bundle with the target GPU host kernel version.
+
+    - name: Load the NVIDIA kernel module
+      ansible.builtin.command:
+        cmd: /usr/sbin/modprobe nvidia
+      register: rke2_nvidia_module_load
+      changed_when: false
+      failed_when: rke2_nvidia_module_load.rc != 0
+
+    - name: Verify the NVIDIA driver can see a GPU
+      ansible.builtin.command:
+        cmd: /usr/bin/nvidia-smi --list-gpus
+      register: rke2_nvidia_gpu_list
+      changed_when: false
+      failed_when: rke2_nvidia_gpu_list.rc != 0
+
+    - name: Verify the NVIDIA container runtime
+      ansible.builtin.command:
+        cmd: /usr/bin/nvidia-container-cli info
+      register: rke2_nvidia_runtime_check
+      changed_when: false
+      failed_when: rke2_nvidia_runtime_check.rc != 0
+
+    - name: Enable NVIDIA persistence mode
+      ansible.builtin.service:
+        name: nvidia-persistenced
+        state: started
+        enabled: true
 
     - name: Clean up NVIDIA temporary directory
       ansible.builtin.file:

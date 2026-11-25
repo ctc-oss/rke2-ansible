@@ -12,6 +12,7 @@ SELINUX_RPM_RELEASEVER="${SELINUX_RPM_RELEASEVER:-8}"
 NVIDIA_DRIVER_STREAM="${NVIDIA_DRIVER_STREAM:-580}"
 NVIDIA_RPM_RELEASEVER="${NVIDIA_RPM_RELEASEVER:-${SELINUX_RPM_RELEASEVER}}"
 NVIDIA_DEPENDENCY_REPOS="${NVIDIA_DEPENDENCY_REPOS:-rhel*-base*,rhel*-appstream*,rhel*-codereadybuilder*}"
+NVIDIA_DEVICE_PLUGIN_IMAGE="${NVIDIA_DEVICE_PLUGIN_IMAGE:-nvcr.io/nvidia/k8s-device-plugin:v0.20.2}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENCODED_VERSION="${RKE2_VERSION//+/%2B}"
@@ -31,6 +32,7 @@ RPM_OUTPUT_DIR="${SCRIPT_DIR}/rpms"
 NVIDIA_RPM_OUTPUT_DIR="${RPM_OUTPUT_DIR}/nvidia"
 NVIDIA_CUDA_REPO_BASE_URL="https://developer.download.nvidia.com/compute/cuda/repos/rhel${NVIDIA_RPM_RELEASEVER}/${RPM_ARCH}"
 NVIDIA_CONTAINER_REPO_BASE_URL="https://nvidia.github.io/libnvidia-container/stable/rpm/${RPM_ARCH}"
+NVIDIA_DEVICE_PLUGIN_ARCHIVE="${SCRIPT_DIR}/nvidia-device-plugin.linux-${ARCH}.tar"
 
 get_primary_path() {
   local repo_url="$1"
@@ -64,6 +66,28 @@ get_rpm_href() {
 require_dnf() {
   if ! command -v dnf >/dev/null 2>&1; then
     echo "Downloading NVIDIA RPMs requires dnf on the artifact download host." >&2
+    exit 1
+  fi
+}
+
+download_device_plugin_image() {
+  if command -v skopeo >/dev/null 2>&1; then
+    skopeo copy \
+      --override-os linux \
+      --override-arch "${ARCH}" \
+      "docker://${NVIDIA_DEVICE_PLUGIN_IMAGE}" \
+      "docker-archive:${NVIDIA_DEVICE_PLUGIN_ARCHIVE}:${NVIDIA_DEVICE_PLUGIN_IMAGE}"
+  elif command -v ctr >/dev/null 2>&1; then
+    ctr --namespace rke2-artifacts content fetch \
+      --all-platforms \
+      "${NVIDIA_DEVICE_PLUGIN_IMAGE}" \
+      "${NVIDIA_DEVICE_PLUGIN_IMAGE}"
+    ctr --namespace rke2-artifacts images export \
+      --all-platforms \
+      "${NVIDIA_DEVICE_PLUGIN_ARCHIVE}" \
+      "${NVIDIA_DEVICE_PLUGIN_IMAGE}"
+  else
+    echo "Downloading the NVIDIA device plugin requires skopeo or ctr." >&2
     exit 1
   fi
 }
@@ -173,6 +197,7 @@ if [[ "${DOWNLOAD_NVIDIA_RPMS}" == "true" ]]; then
 
   rm -rf "${nvidia_download_root}"
   trap - EXIT
+  download_device_plugin_image
 fi
 
 echo "Done! Artifacts are ready in ${SCRIPT_DIR}."

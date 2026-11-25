@@ -81,6 +81,17 @@
   ansible.builtin.include_tasks: configure_rke2.yml
   tags: ["cis"]
 
+- name: Deploy NVIDIA device plugin manifest
+  ansible.builtin.copy:
+    content: "{{ lookup('template', 'nvidia-device-plugin.yml.j2') }}"
+    dest: "{{ rke2_data_dir }}/server/manifests/ansible-nvidia-device-plugin.yaml"
+    mode: "0600"
+  when:
+    - inventory_hostname in groups['rke2_servers']
+    - rke2_nvidia_device_plugin_enabled | bool
+    - groups['rke2_agents'] | map('extract', hostvars, 'rke2_nvidia_enabled') | select('equalto', true) | list | length > 0
+  tags: ["configure", "addons"]
+
 - name: Include task file add_manifest_addons.yml
   ansible.builtin.include_tasks: add_manifest_addons.yml
   vars:
@@ -118,6 +129,14 @@
 
 - name: Start all other rke2 nodes
   ansible.builtin.include_tasks: other_nodes.yml
+  tags: ["configure"]
+
+- name: Validate Kubernetes NVIDIA resources
+  ansible.builtin.include_tasks: validate_nvidia.yml
+  when:
+    - inventory_hostname == groups['rke2_servers'][0]
+    - rke2_nvidia_device_plugin_enabled | bool
+    - groups['rke2_agents'] | map('extract', hostvars, 'rke2_nvidia_enabled') | select('equalto', true) | list | length > 0
   tags: ["configure"]
 
 - name: Configure kubectl,crictl,ctr

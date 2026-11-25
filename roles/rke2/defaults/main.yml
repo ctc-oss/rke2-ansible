@@ -39,6 +39,10 @@ rke2_rpms_path: ""
 ### Used only when node labels include gpu=true and accelerator=nvidia.
 rke2_nvidia_rpms_path: "{{ (rke2_rpms_path ~ '/nvidia') if (rke2_rpms_path | length > 0) else '' }}"
 
+## Deploy the NVIDIA device plugin required to expose nvidia.com/gpu resources.
+rke2_nvidia_device_plugin_enabled: true
+rke2_nvidia_device_plugin_image: "nvcr.io/nvidia/k8s-device-plugin:v0.20.2"
+
 ## Tarball Install Specific Variables:
 
 ### If installing via Tarball, the location to extract the contents.

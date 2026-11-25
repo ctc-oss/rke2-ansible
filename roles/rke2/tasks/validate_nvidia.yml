@@ -1,0 +1,24 @@
+---
+
+- name: Read NVIDIA allocatable resources
+  ansible.builtin.command:
+    argv:
+      - /var/lib/rancher/rke2/bin/kubectl
+      - --kubeconfig
+      - /etc/rancher/rke2/rke2.yaml
+      - get
+      - nodes
+      - --selector=gpu=true,accelerator=nvidia
+      - -o
+      - "jsonpath={range .items[*]}{.metadata.name}={.status.allocatable.nvidia\\.com/gpu}{'\\n'}{end}"
+  register: rke2_nvidia_allocatable
+  changed_when: false
+  retries: 12
+  delay: 10
+  until:
+    - rke2_nvidia_allocatable.stdout_lines | length > 0
+    - rke2_nvidia_allocatable.stdout_lines | reject('match', '^.+=[1-9][0-9]*$') | list | length == 0
+
+- name: Report NVIDIA allocatable resources
+  ansible.builtin.debug:
+    var: rke2_nvidia_allocatable.stdout_lines
